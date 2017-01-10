@@ -80,17 +80,23 @@ export LC_ALL=C
 # "NONE". Note that a user can unset SGE_ROOT if they don't want the
 # cluster to be used.
 ###########################################################################
-METHOD=SGE
+
+METHOD=SLURM
 unset module
-if [ "x$SGE_ROOT" = "x" ] ; then
-	METHOD=NONE
-else
-	QCONF=`which qconf`
-	if [ "x$QCONF" = "x" ]; then
-		METHOD=NONE
-		echo "Warning: SGE_ROOT environment variable is set but Grid Engine software not found, will run locally" >&2
-	fi
-fi
+#~ if [ "x$SGE_ROOT" = "x" ] ; then
+	#~ METHOD=NONE
+#~ else
+	#~ QCONF=`which qconf`
+	#~ if [ "x$QCONF" = "x" ]; then
+		#~ METHOD=NONE
+		#~ echo "Warning: SGE_ROOT environment variable is set but Grid Engine software not found, will run locally" >&2
+	#~ fi
+#~ fi
+
+# do not submit batch jobs on Helix
+if [ `hostname` = "helix.nih.gov" ] ; then METHOD=NONE;fi
+# do not submit batch jobs if  $NOBATCH is set
+if [ ! -z $NOBATCH ] && [ $NOBATCH = true ] ; then METHOD=NONE;fi
 
 # stop submitted scripts from submitting jobs themselves
 if [ "X$FSLSUBALREADYRUN" = "Xtrue" ] ; then
@@ -103,6 +109,11 @@ if [ "X$METHOD" = "XNONE" ]; then
 fi
 FSLSUBALREADYRUN=true
 export FSLSUBALREADYRUN
+
+#~ if /bin/false; then
+    #~ echo "Input args=$@" >&2
+    #~ echo "Method is $METHOD" >&2
+#~ fi
 
 ###########################################################################
 # The following auto-decides what cluster queue to use. The calling
@@ -305,7 +316,7 @@ while [ $1 != -- ] ; do
       shift;;
     -j)
       jid=$2
-      sge_hold="-hold_jid $jid"
+      slurm_hold=" --dependency=afterany:$jid "
       shift;;
     -t)
       taskfile=$2
@@ -324,13 +335,13 @@ while [ $1 != -- ] ; do
       fi
       shift;;
     -N)
-      JobName=$2;
+      JobName=" --job-name=$2 ";
       shift;;
     -m)
       MailOpts=$2;
       shift;;
     -l)
-      LogOpts="-o $2 -e $2";
+      LogOpts=" --logdir=$2 ";
       LogDir="${2}/";
       if [ ! -e ${2} ]; then 
 	  mkdir -p $2
@@ -473,6 +484,40 @@ exec /bin/sh -c "\$command"
 EOF
 	fi
 	;;
+	
+###########################################################################
+# SLURM for Biowulf2
+###########################################################################
+
+    SLURM)
+	# default memory allocation for a swarm of FSL jobs is 4 GB per subjob
+	SWARM_MEM=4;
+	# if the FSL_MEM environment variable is set, use that value for single and/or swarm jobs
+	if [ ! -z $FSL_MEM ]  ; then 
+		SWARM_MEM=$FSL_MEM;
+	fi
+	
+	if [ "x$tasks" = "x" ] ; then
+	    pid=$$
+	    echo $@ > cmd.$pid
+	    chmod +x cmd.$pid
+	    swarm_command="swarm  --silent -f cmd.$pid -g $SWARM_MEM $JobName $LogOpts $slurm_hold"
+	    if [ $verbose -eq 1 ] ; then 
+		echo swarm_command: $swarm_command >&2
+		echo executing: $@ >&2
+	    fi	    
+	    ID=`$swarm_command`
+	    echo $ID
+	else
+		swarm_command="swarm --silent -f $taskfile -g $SWARM_MEM $JobName $LogOpts $slurm_hold"
+	    if [ $verbose -eq 1 ] ; then 
+		echo swarm_command: $swarm_command >&2
+		echo control file: $taskfile >&2
+	    fi
+	    ID=`$swarm_command`
+	    echo $ID
+	fi
+	;;	
 
 ###########################################################################
 # Don't change the following - this runs the commands directly if a
