@@ -17,10 +17,9 @@ def init_logging(verbose=False):
     '''Configures a console logger with log level based on verbosity'''
     console = logging.StreamHandler()
     formatter = logging.Formatter
-    console.setFormatter(formatter("%(levelname)s: %(message)s"))
+    console.setFormatter(formatter('%(levelname)s: %(message)s'))
     console.setLevel(logging.DEBUG)
     logger.addHandler(console)
-    # TODO: support extra verbosity levels? e.g. -v -v -v
     if verbose:
         logger.setLevel(logging.INFO)
     else:
@@ -97,15 +96,15 @@ bigmem.q:   This queue is like the verylong.q but has no memory limits.
     verbose = args.verbose or env.get('FSLSUBVERBOSE', None)
     init_logging(verbose)
 
-    method = "SLURM"
+    method = 'SLURM'
     # do not submit batch jobs on Helix or if $NOBATCH is set
     if socket.getfqdn() == 'helix.nih.gov' or env.get('NOBATCH', None):
         method = None
 
     if env.get('FSLSUBALREADYRUN', None):
         method = None
-        logger.warning("job on queue attempted to submit parallel jobs" +
-                " - running jobs serially instead")
+        logger.warning('job on queue attempted to submit parallel jobs' +
+                ' - running jobs serially instead')
 
     env['FSLSUBALREADYRUN'] = 'true'
 
@@ -116,7 +115,7 @@ bigmem.q:   This queue is like the verylong.q but has no memory limits.
             logger.warn('qconf NOT FOUND')
             qconf = 'echo'
 
-    logger.debug("Method is {}".format(method))
+    logger.debug('Method is {}'.format(method))
 
     ###########################################################################
     # If you have a Parallel Environment configured for OpenMP tasks then
@@ -157,13 +156,11 @@ bigmem.q:   This queue is like the verylong.q but has no memory limits.
     # The following sets up the default queue name, which you may want to change
     ###########################################################################
     queue = 'long.q'
-    queue_cmd = ' -q {}'.format(queue)
     if args.T:
         queue = qname(args.T)
     if args.q:
         queue = args.q
     if args.q or args.T:
-        queue_cmd = ' -q {} '.format(queue)
         if call([qconf, '-sq', queue], env) == 1:
             parser.error('Invalid queue specified!')
 
@@ -274,38 +271,36 @@ bigmem.q:   This queue is like the verylong.q but has no memory limits.
             # insufficient slots on any of the cluster nodes
             peoptions = '-pe {} {} -w e'.format(pename, pethreads)
 
-        # TODO: necessary? never defined in fsl_sub
-        # This might have been replaced by slurm_hold on Biowulf (Adam?)
-        sge_hold = env.get('sge_hold', '')
-
         if command:
             if args.scriptmode:
                 sge_command = 'qsub {} {} {}'.format(logopts, sge_arch, sge_hold)
             else:
-                sge_command = 'qsub -V -cwd -shell n -b y -r y {} {} -M {} -N {} -m {} {} {} {}'.format(
-                        queue_cmd, peoptions, args.mailto, jobname, args.mailopts,
+                sge_command = 'qsub -V -cwd -shell n -b y -r y -q {} {} -M {} -N {} -m {} {} {} {}'.format(
+                        queue, peoptions, args.mailto, jobname, args.mailopts,
                         logopts, sge_arch, sge_hold)
             logger.info('sge_command: {}'.format(sge_command))
             logger.info('executing: {}'.format(' '.join(command)))
-            call("exec {} {} | awk '{print $3'}", stdout=sys.stdout, shell=True)
+            cmd_str = 'exec {} {}'.format(sge_command, command)
+            call(cmd_str + " | awk '{print $3'}", stdout=sys.stdout, shell=True)
         else:
             sge_tasks = '-t 1-{}'.format(ntasks)
-            sge_command = 'qsub -V -cwd {} {} -M {} -N {} -m {} {} {} {} {}'.format(
-                    queue_cmd, peoptions, args.mailto, jobname, args.mailopts,
+            sge_command = 'qsub -V -cwd -q {} {} -M {} -N {} -m {} {} {} {} {}'.format(
+                    queue, peoptions, args.mailto, jobname, args.mailopts,
                     logopts, sge_arch, sge_hold, sge_tasks)
             logger.info('sge_command: {}'.format(sge_command))
             logger.info('control file: {}'.format(args.taskfile))
-            # TODO: translate the following to Python:
-            #
-            # exec $sge_command <<EOF | awk '{print $3}' | awk -F. '{print $1}'
-            # #!/bin/sh
-            #
-            # #$ -S /bin/sh
-            #
-            # command=\`sed -n -e "\${SGE_TASK_ID}p" $taskfile\`
-            #
-            # exec /bin/sh -c "\$command"
-            # EOF
+            # See Line 465 of original fsl_sub for original form of code below
+            script = '''
+            #!/bin/sh
+
+            #$ -S /bin/sh
+
+            command=\`sed -n -e "\${SGE_TASK_ID}p" $taskfile\`
+
+            exec /bin/sh -c "\$command"
+            '''
+            cmd_str = 'exec {} {}'.format(sge_command, script)
+            call(cmd_str + " | awk '{print $3'} | awk -F. '{print $1}'", stdout=sys.stdout, shell=True)
 
     elif method == 'SLURM':
         # default memory allocation for a swarm of FSL jobs is 4 GB per subjob
@@ -388,7 +383,7 @@ def qname(estimated_duration):
     else:
         queue = 'verylong.q'
 
-    logger.debug("Estimated time was {} mins: queue name is {}".format(
+    logger.debug('Estimated time was {} mins: queue name is {}'.format(
         (estimated_duration, queue)))
     return queue
 
@@ -402,7 +397,7 @@ def which(program):
         if is_exe(program):
             return program
     else:
-        for path in os.environ["PATH"].split(os.pathsep):
+        for path in os.environ['PATH'].split(os.pathsep):
             path = path.strip('"')
             exe_file = os.path.join(path, program)
             if is_exe(exe_file):
