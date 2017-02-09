@@ -139,7 +139,7 @@ class SGE(Method):
         logger.info('sge_command: {}'.format(sge_command))
         logger.info('executing: {}'.format(' '.join(command)))
         cmd_str = 'exec {} {}'.format(sge_command, command)
-        call(cmd_str + " | awk '{print $3'}", stdout=sys.stdout, shell=True)
+        call(cmd_str + " | awk '{print $3'}", shell=True)
 
     def submit_taskfile(self, taskfile):
         sge_tasks = '-t 1-{}'.format(self.ntasks)
@@ -159,8 +159,7 @@ class SGE(Method):
         exec /bin/sh -c "\$command"
         '''
         cmd_str = 'exec {} {}'.format(sge_command, script)
-        call(cmd_str + " | awk '{print $3'} | awk -F. '{print $1}'",
-                stdout=sys.stdout, shell=True)
+        call(cmd_str + " | awk '{print $3'} | awk -F. '{print $1}'", shell=True)
 
 
 class Slurm(Method):
@@ -196,7 +195,7 @@ class Slurm(Method):
         if self.hold:
             swarm_command += ['--dependency', 'afterany:{}'.format(self.hold)]
         logger.info('swarm command: {}'.format(' '.join(swarm_command)))
-        call(swarm_command, env, stdout=sys.stdout)
+        call(swarm_command, env)
 
 class Local(Method):
     ###########################################################################
@@ -228,7 +227,7 @@ class Local(Method):
         with open(stdout_name, 'w') as stdout:
             with open(stderr_name, 'w') as stderr:
                 logger.info('Executing {}'.format(task))
-                return call(task, env, stdout, stderr, shell=True)
+                return call(task, env, stdout=stdout, stderr=stderr, shell=True)
 
 def init_logging(verbose=False):
     '''Configures a console logger with log level based on verbosity'''

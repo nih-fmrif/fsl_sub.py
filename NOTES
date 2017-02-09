@@ -1,21 +1,2 @@
-- Do we need the SGE/qsub stuff? If not, significantly cleans up fsl_sub
-- Could use some refactoring once functionality is fully tested, especially if we remove SGE stuff
-- I haven't tested on Biowulf because I haven't figured out how yet
-    - I have https://github.com/ReproNim/simple_workflow
-    - I load modules `Anaconda` and `fsl`
-    - ... The true `fsl_sub` is prepended on my path and will be in sub-shells, correct?
-    - Doesn't allow me to test all options
-    - It might be better to come up with a quick test suite that runs `fsl_sub` directly, testing each option
-
-Things to test:
-- simple command-line options
-- taskfiles
-- environment variables
-
-Things to remove:
-- sge_arch
-- queue stuff (queue name, qconf, qstat)
-- PE name/threads (remove everything except setting OMP_NUM_THREADS)
-
-Things to add:
-- swarm options: per-job memory, threads, processes, etc.
+- FEEDS doesn't appear to use fsl_sub
+- I've tested with Slurm, however
