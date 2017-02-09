@@ -51,10 +51,10 @@ class Method(object):
         duration: estimated task time in minutes
         '''
         for dur in sorted(self.queues.keys(), reverse=True):
-            if duration > dur:
+            if duration >= dur:
                 self.queue = self.queues[dur]
                 logger.debug('Estimated time was {} mins: queue name is {}'.format(
-                        (duration, self.queue)))
+                        duration, self.queue))
                 return
 
     @property
@@ -65,9 +65,10 @@ class Method(object):
     def queue(self, q):
         if not self._queue_valid(q):
             self.fail('Invalid queue specified!')
+        self._queue = q
 
     def _queue_valid(self, q):
-        return True
+        return q is not None
 
     def submit_command(self):
         pass
@@ -173,30 +174,37 @@ class Slurm(Method):
         # default memory allocation for a swarm of FSL jobs is 4 GB per subjob
         # if the FSL_MEM env var is set, use that value for single and/or swarm jobs
         self.swarm_mem = env.get('FSL_MEM', '4')
-        self.slurm_hold = ' --dependency=afterany:{} '.format(self.hold)
-        self.logopts = ' --logdir={} '.format(self.logdir)
-        self.jobname = ' --job-name={}'.format(self.jobname)
 
     def submit_command(self, command):
         self.__setup()
         cmd_string = ' '.join(command)
-        cmd_filename = 'cmd.{}'.format(self.pid)
+        cmd_filename = os.path.join(self.logdir, 'cmd.{}'.format(self.pid))
         with open(cmd_filename, 'w') as f:
             f.write(cmd_string + '\n')
         # Make cmd_filename executable, e.g. chmod +x
         st = os.stat(cmd_filename)
         os.chmod(cmd_filename, st.st_mode | 0111)
 
-        swarm_command = ['swarm', '--silent', '-f', cmd_filename, '-g',
-                self.swarm_mem, self.jobname, self.logopts, self.slurm_hold]
+        swarm_command = ['swarm', '--silent', '-f', cmd_filename,
+                '-g', self.swarm_mem,
+                '--partition', self.queue,
+                '--job-name', self.jobname,
+                '--logdir', self.logdir]
+        if self.hold:
+            swarm_command += ['--dependency', 'afterany:{}'.format(self.hold)]
         logger.info('swarm command: {}'.format(' '.join(swarm_command)))
         logger.info('executing {}'.format(cmd_string))
         call(swarm_command, env, stdout=sys.stdout)
 
     def submit_taskfile(self, taskfile):
         self.__setup()
-        swarm_command = ['swarm', '--silent', '-f', taskfile, '-g',
-                self.swarm_mem, self.jobname, self.logopts, self.slurm_hold]
+        swarm_command = ['swarm', '--silent', '-f', taskfile,
+                '-g', self.swarm_mem,
+                '--partition', self.queue,
+                '--job-name', self.jobname,
+                '--logdir', self.logdir]
+        if self.hold:
+            swarm_command += ['--dependency', 'afterany:{}'.format(self.hold)]
         logger.info('swarm command: {}'.format(' '.join(swarm_command)))
         logger.info('control file: {}'.format(taskfile))
         call(swarm_command, env, stdout=sys.stdout)
@@ -279,10 +287,10 @@ bigmem.q:   This queue is like the verylong.q but has no memory limits.
     parser.add_argument('command', nargs='?', help='FSL command')
     parser.add_argument('arg', nargs='*', help='FSL command')
 
-    parser.add_argument('-T', metavar='minutes', help='Estimated job length in minutes, used to auto-set queue name')
+    parser.add_argument('-T', metavar='minutes', type=int, help='Estimated job length in minutes, used to auto-set queue name')
     parser.add_argument('-q', metavar='queuename', help='Possible values for <queuename> are "verylong.q", "long.q" and "short.q". See below for details Default is "long.q".')
     parser.add_argument('-a', metavar='arch-name', help='Architecture [e.g., darwin or lx24-amd64]')
-    parser.add_argument('-p', metavar='job-priority', help='Lower priority [0:-1024] default = 0')
+    parser.add_argument('-p', metavar='job-priority', type=int, help='Lower priority [0:-1024] default = 0')
     parser.add_argument('-M', metavar='email-address', help='Who to email, default = {}'.format(default_mailto))
     parser.add_argument('-j', metavar='jid', help='Place a hold on this task until job jid has completed')
     parser.add_argument('-t', metavar='filename', help='Specify a task file of commands to execute in parallel')
@@ -363,6 +371,8 @@ bigmem.q:   This queue is like the verylong.q but has no memory limits.
     # The following sets up the default queue name, which you may want to change
     ###########################################################################
     if args.T:
+        if args.T < 0:
+            args.T = 0
         method.autodetect_queue(args.T)
     if args.q:
         method.queue = args.q
@@ -496,4 +506,8 @@ def which(program):
     return None
 
 if __name__ == '__main__':
+    # For testing on Biowulf. TODO: remove
+    #import datetime
+    #with open('/data/naegelejd/fsl_sub/fsl_sub.log', 'a') as f:
+    #    f.write('Called at {}\n'.format(datetime.datetime.now()))
     main()
