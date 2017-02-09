@@ -36,7 +36,7 @@ class Method(object):
         self.logdir = None
         self.ntasks = 0
         self.pid = os.getpid()
-        self.mailto = None
+        self.mailto = '{}@mail.nih.gov'.format(get_username())
         self.mailopts = None
 
     def autodetect_queue(self, duration):
@@ -271,15 +271,52 @@ verylong.q: This queue is for jobs which will take longer than 24h CPU time.
 bigmem.q:   This queue is like the verylong.q but has no memory limits.
 '''
 
+    # New epilog for Biowulf/Slurm
+    epilog = '''
+Queues (Partitions):
+
+  Biowulf nodes are grouped into partitions. A partition can be specified
+  when submitting a job. The default partition is 'norm'. The freen command
+  can be used to see free nodes and CPUs, and available types of nodes on
+  each partition.
+
+  See also https://hpc.nih.gov/docs/userguide.html#partitions.
+'''
+
     description='''
-%(prog)s V1.1 - wrapper for job control system such as SGE
+%(prog)s V2.0 - wrapper for job control system such as Slurm or SGE
 
 %(prog)s gzip *.img *.hdr
 %(prog)s -q short.q gzip *.img *.hdr
 %(prog)s -a darwin regscript rawdata outputdir ...
 '''
 
-    default_mailto = '{}@mail.nih.gov'.format(get_username())
+    warnings = []
+
+    # Prepare environment for subprocesses
+    if 'module' in env:
+        del env['module']
+
+    method = None
+    if env.get('FSLSUBALREADYRUN', None):
+        method = Local()
+        warnings.append('job on queue attempted to submit parallel jobs' +
+                ' - running jobs serially instead')
+    # do not submit batch jobs on Helix or if $NOBATCH is set
+    elif socket.getfqdn() == 'helix.nih.gov' or env.get('NOBATCH', None):
+        method = Local()
+    elif env.get('SGE_ROOT', None):
+        qconf = which('qconf')
+        if not qconf:
+            warnings.append('Warning: SGE_ROOT environment variable is set but Grid Engine software not found, will run locally')
+            method = Local()
+        else:
+            method = SGE()
+            method.qconf = qconf
+    else:
+        method = Slurm()
+
+    env['FSLSUBALREADYRUN'] = 'true'
 
     parser = argparse.ArgumentParser(description=description, epilog=epilog,
             formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -288,10 +325,11 @@ bigmem.q:   This queue is like the verylong.q but has no memory limits.
     parser.add_argument('arg', nargs='*', help='FSL command')
 
     parser.add_argument('-T', metavar='minutes', type=int, help='Estimated job length in minutes, used to auto-set queue name')
-    parser.add_argument('-q', metavar='queuename', help='Possible values for <queuename> are "verylong.q", "long.q" and "short.q". See below for details Default is "long.q".')
+    avail_queues = ', '.join('"{}"'.format(q) for q in method.queues.values())
+    parser.add_argument('-q', metavar='queuename', help='Possible values for <queuename> are {}. See below for details. Default is "{}".'.format(avail_queues, method.queue))
     parser.add_argument('-a', metavar='arch-name', help='Architecture [e.g., darwin or lx24-amd64]')
     parser.add_argument('-p', metavar='job-priority', type=int, help='Lower priority [0:-1024] default = 0')
-    parser.add_argument('-M', metavar='email-address', help='Who to email, default = {}'.format(default_mailto))
+    parser.add_argument('-M', metavar='email-address', help='Who to email, default = {}'.format(method.mailto))
     parser.add_argument('-j', metavar='jid', help='Place a hold on this task until job jid has completed')
     parser.add_argument('-t', metavar='filename', help='Specify a task file of commands to execute in parallel')
     parser.add_argument('-N', metavar='jobname', help='Specify jobname as it will appear on queue')
@@ -302,42 +340,19 @@ bigmem.q:   This queue is like the verylong.q but has no memory limits.
     parser.add_argument('-s', metavar='pename,threads', help='Submit a multi-threaded task - requires a PE (<pename>) to be configured for the requested queues. "threads" specifies the number of threads to run')
     parser.add_argument('-v', action='store_true', help='Verbose mode.')
 
-    parser.set_defaults(l='./', M=default_mailto)
+    parser.set_defaults(l='./')
 
     args = parser.parse_args()
-
-    # Prepare environment for subprocesses
-    if 'module' in env:
-        del env['module']
 
     # Configure verbosity
     verbose = args.v or env.get('FSLSUBVERBOSE', None)
     init_logging(verbose)
 
-    method = None
-    if env.get('FSLSUBALREADYRUN', None):
-        method = Local()
-        logger.warning('job on queue attempted to submit parallel jobs' +
-                ' - running jobs serially instead')
-    # do not submit batch jobs on Helix or if $NOBATCH is set
-    elif socket.getfqdn() == 'helix.nih.gov' or env.get('NOBATCH', None):
-        method = Local()
-    elif env.get('SGE_ROOT', None):
-        qconf = which('qconf')
-        if not qconf:
-            logger.warn('Warning: SGE_ROOT environment variable is set but Grid Engine software not found, will run locally')
-            method = Local()
-        else:
-            method = SGE()
-            method.qconf = qconf
-    else:
-        method = Slurm()
-
-    env['FSLSUBALREADYRUN'] = 'true'
-
-    logger.debug('Method is {}'.format(method))
+    for warning in warnings:
+        logger.warn(warning)
 
     method.fail = parser.error
+    logger.debug('Method is {}'.format(method))
 
     # -z tells us to exit early if output image already exists
     if args.z:
