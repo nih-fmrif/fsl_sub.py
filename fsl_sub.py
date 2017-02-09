@@ -2,26 +2,40 @@
 
 from __future__ import print_function
 import os
-import sys
 import pwd
 import socket
 import logging
 import argparse
 import subprocess
 
-###########################################################################
-# If you have a Parallel Environment configured for OpenMP tasks then
-# the variable OMP_PE should be set to the name you have defined for that
-# PE. The script will work out which queues have that PE setup on them.
-# Note, we support openmp tasks even when Grid Engine is not in use.
-###########################################################################
-OMP_PE = 'openmp'
-
 # Global logger. Initialized in init_logging.
 logger = logging.getLogger(__name__)
 
 # Global environment. Used by subprocesses.
 env = os.environ.copy()
+
+# Default memory allocation for a swarm of FSL jobs is 4 GB per subjob
+# if the FSL_MEM env var is set, use that value for single and/or swarm jobs
+FSL_MEM = env.get('FSL_MEM', 4)
+
+# Override the queue/partition used, e.g. FSL_QUEUE=nimh
+FSL_QUEUE = env.get('FSL_QUEUE', None)
+
+# Do not submit batch jobs on Helix or if $NOBATCH is set
+NOBATCH = env.get('NOBATCH', False) or socket.getfqdn() == 'helix.nih.gov'
+
+# If defined, will use SGE for job submission
+SGE_ROOT = env.get('SGE_ROOT', None)
+
+FSLSUBALREADYRUN = env.get('FSLSUBALREADYRUN', False)
+FSLSUBVERBOSE = env.get('FSLSUBVERBOSE', False)
+
+
+# If you have a Parallel Environment configured for OpenMP tasks then
+# the variable OMP_PE should be set to the name you have defined for that
+# PE. The script will work out which queues have that PE setup on them.
+# Note, we support openmp tasks even when Grid Engine is not in use.
+OMP_PE = 'openmp'
 
 
 class Method(object):
@@ -38,6 +52,8 @@ class Method(object):
         self.pid = os.getpid()
         self.mailto = '{}@mail.nih.gov'.format(get_username())
         self.mailopts = None
+        self.parallel_env = None
+        self.nthreads = None
 
     def autodetect_queue(self, duration):
         '''The following auto-decides what cluster queue to use. The calling
@@ -80,6 +96,7 @@ class Method(object):
         pass
 
 class SGE(Method):
+    '''Runs tasks using qsub command.'''
     queues = {0: 'veryshort.q', 20: 'short.q', 120: 'long.q', 1440: 'verylong.q'}
 
     def __init__(self):
@@ -108,26 +125,24 @@ class SGE(Method):
             self.sge_arch = '-l arch={}'.format(self.arch)
 
         self.peoptions = ''
-       ###########################################################################
-       # Test Parallel environment options
-       ###########################################################################
-        if self.pename:
+        # Test Parallel environment options
+        if self.parallel_env:
             # Is this a configured PE?
-            if call([self.qconf, '-sp', self.pename]) == 1:
-                self.fail('{} is not a valid PE'.format(self.pename))
+            if call([self.qconf, '-sp', self.parallel_env]) == 1:
+                self.fail('{} is not a valid PE'.format(self.parallel_env))
 
             # Get a list of queues configured for this PE and confirm that the queue
             # we have submitted to has that PE set up.
-            if call(['qstat', '-g', 'c', '-pe', self.pename]) == 1:
+            if call(['qstat', '-g', 'c', '-pe', self.parallel_env]) == 1:
                 self.fail('No parallel environments configured!')
 
             if call("qstat -g c -pe {} | sed '1,2d' | awk '{ print $1 }' | grep ^{}"
-                    .format(self.pename, self.queue), shell=True) == 1:
-                self.fail('PE {} is not configured on {}'.format(self.pename, self.queue))
+                    .format(self.parallel_env, self.queue), shell=True) == 1:
+                self.fail('PE {} is not configured on {}'.format(self.parallel_env, self.queue))
 
             # The -w e option will result in the job failing if there are
             # insufficient slots on any of the cluster nodes
-            self.peoptions = '-pe {} {} -w e'.format(self.pename, self.pethreads)
+            self.peoptions = '-pe {} {} -w e'.format(self.parallel_env, self.nthreads)
 
     def submit_command(self, command):
         if self.scriptmode:
@@ -163,19 +178,14 @@ class SGE(Method):
 
 
 class Slurm(Method):
+    '''Runs tasks using Biowful's swarm command.'''
     queues = {0: 'quick', 240: 'norm', 10*24*60: 'unlimited'}
 
     def __init__(self):
         super(Slurm, self).__init__()
         self._queue = 'norm'
 
-    def __setup(self):
-        # default memory allocation for a swarm of FSL jobs is 4 GB per subjob
-        # if the FSL_MEM env var is set, use that value for single and/or swarm jobs
-        self.swarm_mem = env.get('FSL_MEM', '4')
-
     def submit_command(self, command):
-        self.__setup()
         cmd_string = ' '.join(command)
         cmd_filename = os.path.join(self.logdir, 'cmd.{}'.format(self.pid))
         with open(cmd_filename, 'w') as f:
@@ -186,22 +196,20 @@ class Slurm(Method):
         self.submit_taskfile(cmd_filename)
 
     def submit_taskfile(self, taskfile):
-        self.__setup()
         swarm_command = ['swarm', '--silent', '-f', taskfile,
-                '-g', self.swarm_mem,
+                '-g', str(FSL_MEM),
                 '--partition', self.queue,
                 '--job-name', self.jobname,
                 '--logdir', self.logdir]
         if self.hold:
             swarm_command += ['--dependency', 'afterany:{}'.format(self.hold)]
+        if self.nthreads:
+            swarm_command += ['--threads-per-process', str(self.nthreads)]
         logger.info('swarm command: {}'.format(' '.join(swarm_command)))
         call(swarm_command, env)
 
 class Local(Method):
-    ###########################################################################
-    # This runs the commands directly if a cluster is not being used.
-    ###########################################################################
-
+    '''Runs the commands directly if a cluster is not being used.'''
     def submit_command(self, command):
         stdout_name = '{}.o{}'.format(os.path.join(self.logdir, self.jobname), self.pid)
         stderr_name = '{}.e{}'.format(os.path.join(self.logdir, self.jobname), self.pid)
@@ -285,14 +293,12 @@ Queues (Partitions):
         del env['module']
 
     method = None
-    if env.get('FSLSUBALREADYRUN', None):
+    if FSLSUBALREADYRUN:
         method = Local()
-        warnings.append('job on queue attempted to submit parallel jobs' +
-                ' - running jobs serially instead')
-    # do not submit batch jobs on Helix or if $NOBATCH is set
-    elif socket.getfqdn() == 'helix.nih.gov' or env.get('NOBATCH', None):
+        warnings.append('job on queue attempted to submit parallel jobs - running jobs serially instead')
+    elif NOBATCH:
         method = Local()
-    elif env.get('SGE_ROOT', None):
+    elif SGE_ROOT:
         qconf = which('qconf')
         if not qconf:
             warnings.append('Warning: SGE_ROOT environment variable is set but Grid Engine software not found, will run locally')
@@ -332,7 +338,7 @@ Queues (Partitions):
     args = parser.parse_args()
 
     # Configure verbosity
-    verbose = args.v or env.get('FSLSUBVERBOSE', None)
+    verbose = args.v or FSLSUBVERBOSE
     init_logging(verbose)
 
     for warning in warnings:
@@ -368,14 +374,15 @@ Queues (Partitions):
     elif taskfile and command:
         parser.error('You appear to have specified both a task file and a command to run')
 
-
-    ###########################################################################
-    # The following sets up the default queue name, which you may want to change
-    ###########################################################################
+    # FSL Queue (Partition) can be specified via environment variable
+    if FSL_QUEUE:
+        method.q = FSL_QUEUE
+    # Specifying -T will auto-detect a queue/partition based on estimated task duration
     if args.T:
         if args.T < 0:
             args.T = 0
         method.autodetect_queue(args.T)
+    # Specifying -q directly will set the queue/partition
     if args.q:
         method.queue = args.q
 
@@ -440,12 +447,12 @@ Queues (Partitions):
     if args.s:
         pevalues = args.s.split(',')
         if len(pevalues) < 2:
-            parser.error('pename must be of the form <pename,nthreads>')
-        method.pename, method.pethreads = pevalues[0], pevalues[1]
+            parser.error('pename must be of the form <pename,nthreads>, e.g. "openmp,4"')
+        method.parallel_env, method.nthreads = pevalues[0], pevalues[1]
 
         # If the PE name is 'openmp' then limit the number of threads to those specified
-        if method.pename == OMP_PE:
-            env['OMP_NUM_THREADS'] = method.pethreads
+        if method.parallel_env == OMP_PE:
+            env['OMP_NUM_THREADS'] = method.nthreads
 
     ###########################################################################
     # The following is the main call to the cluster, using the "qsub" SGE
