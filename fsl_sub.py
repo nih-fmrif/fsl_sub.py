@@ -184,17 +184,7 @@ class Slurm(Method):
         # Make cmd_filename executable, e.g. chmod +x
         st = os.stat(cmd_filename)
         os.chmod(cmd_filename, st.st_mode | 0111)
-
-        swarm_command = ['swarm', '--silent', '-f', cmd_filename,
-                '-g', self.swarm_mem,
-                '--partition', self.queue,
-                '--job-name', self.jobname,
-                '--logdir', self.logdir]
-        if self.hold:
-            swarm_command += ['--dependency', 'afterany:{}'.format(self.hold)]
-        logger.info('swarm command: {}'.format(' '.join(swarm_command)))
-        logger.info('executing {}'.format(cmd_string))
-        call(swarm_command, env, stdout=sys.stdout)
+        self.submit_taskfile(cmd_filename)
 
     def submit_taskfile(self, taskfile):
         self.__setup()
@@ -206,7 +196,6 @@ class Slurm(Method):
         if self.hold:
             swarm_command += ['--dependency', 'afterany:{}'.format(self.hold)]
         logger.info('swarm command: {}'.format(' '.join(swarm_command)))
-        logger.info('control file: {}'.format(taskfile))
         call(swarm_command, env, stdout=sys.stdout)
 
 class Local(Method):
@@ -215,32 +204,31 @@ class Local(Method):
     ###########################################################################
 
     def submit_command(self, command):
-        stdoutName = '{}.o{}'.format(os.path.join(self.logdir, self.jobname), self.pid)
-        stderrName = '{}.e{}'.format(os.path.join(self.logdir, self.jobname), self.pid)
+        stdout_name = '{}.o{}'.format(os.path.join(self.logdir, self.jobname), self.pid)
+        stderr_name = '{}.e{}'.format(os.path.join(self.logdir, self.jobname), self.pid)
         cmd_string = ' '.join(command)
-        ret = 0
-        with open(stdoutName, 'w') as stdout:
-            with open(stderrName, 'w') as stderr:
-                logger.info('Executing {}'.format(cmd_string))
-                ret = call(cmd_string, env, stdout, stderr, shell=True)
-
+        ret = self.__run(cmd_string, env, stdout_name, stderr_name)
         if ret != 0:
-            with open(stderrName) as stderr:
+            with open(stderr_name) as stderr:
                 for line in stderr:
                     print(line)
             os.exit(ret)
         print(self.pid)
 
     def submit_taskfile(self, taskfile):
-        stdoutName = '{}.o{}'.format(os.path.join(self.logdir, self.jobname), self.pid)
-        stderrName = '{}.e{}'.format(os.path.join(self.logdir, self.jobname), self.pid)
+        stdout_name = '{}.o{}'.format(os.path.join(self.logdir, self.jobname), self.pid)
+        stderr_name = '{}.e{}'.format(os.path.join(self.logdir, self.jobname), self.pid)
         with open(taskfile) as tasks:
             for n, task in enumerate(tasks):
-                with open('{}.{}'.format(stdoutName, n)) as stdout:
-                    with open('{}.{}'.format(stderrName, n)) as stderr:
-                        logger.info('Executing {}'.format(task))
-                        call(task, env, stdout, stderr, shell=True)
+                self.__run(task, env, '{}.{}'.format(stdout_name, n),
+                        '{}.{}'.format(stderr_name, n))
         print(self.pid)
+
+    def __run(self, task, env, stdout_name, stderr_name):
+        with open(stdout_name, 'w') as stdout:
+            with open(stderr_name, 'w') as stderr:
+                logger.info('Executing {}'.format(task))
+                return call(task, env, stdout, stderr, shell=True)
 
 def init_logging(verbose=False):
     '''Configures a console logger with log level based on verbosity'''
@@ -477,30 +465,6 @@ def call(args, env, stdout=None, stderr=None, shell=False):
 
 def get_username():
     return pwd.getpwuid(os.getuid())[0]
-
-def qname(estimated_duration):
-    '''The following auto-decides what cluster queue to use. The calling
-    FSL program will probably use the -T option when calling fsl_sub,
-    which tells fsl_sub how long (in minutes) the process is expected to
-    take (in the case of the -t option, how long each line in the
-    supplied file is expected to take). You need to setup the following
-    list to map ranges of timings into your cluster queues - it doesn't
-    matter how many you setup, that's up to you.
-
-    estimated_duration: estimated task time in minutes
-    '''
-    if estimated_duration < 20:
-        queue = 'veryshort.q'
-    elif estimated_duration < 120:
-        queue = 'short.q'
-    elif estimated_duration < 1440:
-        queue = 'long.q'
-    else:
-        queue = 'verylong.q'
-
-    logger.debug('Estimated time was {} mins: queue name is {}'.format(
-        (estimated_duration, queue)))
-    return queue
 
 def which(program):
     '''http://stackoverflow.com/a/377028/1689220'''
