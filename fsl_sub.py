@@ -315,7 +315,7 @@ Queues (Partitions):
             formatter_class=argparse.RawDescriptionHelpFormatter)
 
     parser.add_argument('command', nargs='?', help='FSL command')
-    parser.add_argument('arg', nargs='*', help='FSL command')
+    parser.add_argument('arguments', nargs=argparse.REMAINDER, help='FSL command arguments')
 
     parser.add_argument('-T', metavar='minutes', type=int, help='Estimated job length in minutes, used to auto-set queue name')
     avail_queues = ', '.join('"{}"'.format(q) for q in method.queues.values())
@@ -367,8 +367,8 @@ Queues (Partitions):
             parser.error('The command you have requested cannot be found or is not executable')
         # Add command arguments if specified
         command = [args.command]
-        if args.arg:
-            command += args.arg
+        if args.arguments:
+            command += args.arguments
     if not taskfile and not command:
         parser.error('Either supply a command to run or a parallel task file')
     elif taskfile and command:
