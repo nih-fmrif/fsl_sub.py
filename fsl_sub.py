@@ -374,9 +374,6 @@ Queues (Partitions):
     elif taskfile and command:
         parser.error('You appear to have specified both a task file and a command to run')
 
-    # FSL Queue (Partition) can be specified via environment variable
-    if FSL_QUEUE:
-        method.q = FSL_QUEUE
     # Specifying -T will auto-detect a queue/partition based on estimated task duration
     if args.T:
         if args.T < 0:
@@ -385,6 +382,9 @@ Queues (Partitions):
     # Specifying -q directly will set the queue/partition
     if args.q:
         method.queue = args.q
+    # FSL Queue (Partition) can be specified via environment variable
+    if FSL_QUEUE:
+        method.queue = FSL_QUEUE
 
     # -a sets is the cluster submission flag for controlling the required
     # hardware architecture (normally not set by the calling program)
